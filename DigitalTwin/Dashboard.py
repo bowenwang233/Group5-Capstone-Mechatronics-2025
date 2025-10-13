@@ -10,28 +10,6 @@ What this file does:
   * Large Simulation panel (bottom-left)
   * Tiny floating Status card
 - Reads *current* data from a shared state_store (threadsafe buffers),
-  which you will implement in a separate module (e.g., ZeroMQ subscribers).
-
-What this file does NOT do:
-- It does NOT open sockets, read ZeroMQ, or write data.
-- It does NOT manage threads for producers.
-- It only *reads* from state_store.
-
-Expected state_store API (you will implement later):
-------------------------------------------------------------------
-get_timeseries(window_sec: float) -> dict:
-    returns {"t": list[float], "v": list[float], "a": list[float], "steer": list[float]}
-    - - t is relative seconds in [-window_sec, 0] (past → 0)
-    - v in m/s, a in m/s^2, steer in degrees
-get_lidar() -> tuple[list[float], list[float], list[float]]:
-    returns (xs, ys, zs) point cloud arrays (already downsampled)
-get_camera_b64() -> str | None:
-    returns a data-URI string like "data:image/jpeg;base64,...." or None
-get_status() -> dict:
-    returns {"battery": "85%", "conn": "OK" | "LOST", "mode": "AUTO" | "MANUAL"}
-------------------------------------------------------------------
-
-You can test this module before building state_store; it will show placeholders.
 """
 
 from __future__ import annotations
