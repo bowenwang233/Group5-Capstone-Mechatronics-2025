@@ -43,12 +43,17 @@ from dash import html, dcc, Output, Input, no_update
 import plotly.graph_objects as go
 
 from camera_stream import CameraStream
+from LidarReceiver import LidarReceiver
+
 
 CAR_IP = "192.168.68.103"   # ← set JetArcker IP
 VIDEO_PORT = 5557
 
 cam_stream = CameraStream(CAR_IP, VIDEO_PORT)
 cam_stream.start()
+
+lidar_receiver = LidarReceiver()   
+lidar_receiver.start()
 
 # ---------------------------------------------------------------------
 # Try to import your future state_store. If not present, use fallbacks.
@@ -200,12 +205,15 @@ app.layout = html.Div(
 
                 # --- LiDAR (bottom-right) ---
                 html.Div(
+                [
                 dcc.Graph(
                     id="graph-lidar",
                     style={"height": "100%"},
                     config={"responsive": True},
                 ),
-                style=CARD_STYLE | {"gridArea": "lidar", "height": "100%"},
+                dcc.Interval(id="lidar-update", interval=200, n_intervals=0),
+                ],
+                style=CARD_STYLE | {"gridArea": "lidar", "height": "100%", "minHeight": 0},
                 ),
 
                 # --- Tiny floating Status (corner) ---
@@ -235,6 +243,27 @@ app.layout = html.Div(
 
 
 # ----------------------------- CALLBACKS -----------------------------
+#Lidar callback
+@app.callback(
+    Output("graph-lidar", "figure"),
+    Input("lidar-update", "n_intervals"),
+)
+def update_lidar_plot(_):
+    x, y, r = lidar_receiver.latest_xy(default_radius=8.0, downsample=1)
+    fig = go.Figure()
+    fig.add_trace(go.Scattergl(x=x, y=y, mode="markers", marker=dict(size=3), name="LiDAR"))
+    fig.add_trace(go.Scattergl(x=[0], y=[0], mode="markers", marker=dict(size=10), name="robot"))
+    fig.add_trace(go.Scattergl(x=[0, r], y=[0, 0], mode="lines", name="heading"))
+    fig.update_layout(
+        xaxis=dict(scaleanchor="y", scaleratio=1, range=[-r, r], zeroline=False),
+        yaxis=dict(range=[-r, r], zeroline=False),
+        height=700,
+        margin=dict(l=10, r=10, t=30, b=10),
+        template="plotly_dark",
+        title="LiDAR Point Cloud",
+    )
+    return fig
+    
 # Camera: its own tiny callback, driven by camera-tick
 @app.callback(Output("camera-feed", "src"), Input("camera-tick", "n_intervals"))
 def update_camera(_):
@@ -248,7 +277,6 @@ def update_camera(_):
     Output("graph-velocity", "figure"),
     Output("graph-accel", "figure"),
     Output("graph-steer", "figure"),
-    Output("graph-lidar", "figure"),
     Output("status-battery", "children"),
     Output("status-conn", "children"),
     Output("status-mode", "children"),
@@ -274,16 +302,6 @@ def update_ui(_n):
     fig_a = mk_line("Acceleration", t, a, ACC_RANGE, "m/s²")
     fig_s = mk_line("Wheel Angle", t, steer, STEER_RANGE, "deg")
 
-    # ---------- LiDAR ----------
-    if state_store and hasattr(state_store, "get_lidar"):
-        try:
-            xs, ys, zs = state_store.get_lidar() or ([], [], [])
-        except Exception:
-            xs, ys, zs = [], [], []
-    else:
-        xs, ys, zs = [], [], []
-    fig_lidar = lidar_fig(xs, ys, zs)
-
     # ---------- Status ----------
     if state_store and hasattr(state_store, "get_status"):
         try:
@@ -296,7 +314,7 @@ def update_ui(_n):
     conn = st.get("conn", "—")
     mode = st.get("mode", "—")
 
-    return fig_v, fig_a, fig_s, fig_lidar, batt, conn, mode
+    return fig_v, fig_a, fig_s, batt, conn, mode
 
 # ----------------------------- ENTRY POINT ---------------------------
 def _open_browser():
@@ -314,7 +332,8 @@ if __name__ == "__main__":
     try:
         app.run(host="0.0.0.0", port=8050, debug=False)
     finally:
-        cam_stream.stop()    
+        cam_stream.stop() 
+        lidar_receiver.stop()   
 
 
 
