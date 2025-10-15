@@ -1,6 +1,6 @@
 # dashboard_app.py
 """
-Digital Twin Dashboard (UI-only module)
+Digital Twin Dashboard (UI-only)
 
 What this file does:
 - Provides the Dash layout and lightweight callbacks to render:
@@ -10,6 +10,28 @@ What this file does:
   * Large Simulation panel (bottom-left)
   * Tiny floating Status card
 - Reads *current* data from a shared state_store (threadsafe buffers),
+  which you will implement in a separate module (e.g., ZeroMQ subscribers).
+
+What this file does NOT do:
+- It does NOT open sockets, read ZeroMQ, or write data.
+- It does NOT manage threads for producers.
+- It only *reads* from state_store.
+
+Expected state_store API (you will implement later):
+------------------------------------------------------------------
+get_timeseries(window_sec: float) -> dict:
+    returns {"t": list[float], "v": list[float], "a": list[float], "steer": list[float]}
+    - - t is relative seconds in [-window_sec, 0] (past → 0)
+    - v in m/s, a in m/s^2, steer in degrees
+get_lidar() -> tuple[list[float], list[float], list[float]]:
+    returns (xs, ys, zs) point cloud arrays (already downsampled)
+get_camera_b64() -> str | None:
+    returns a data-URI string like "data:image/jpeg;base64,...." or None
+get_status() -> dict:
+    returns {"battery": "85%", "conn": "OK" | "LOST", "mode": "AUTO" | "MANUAL"}
+------------------------------------------------------------------
+
+You can test this module before building state_store; it will show placeholders.
 """
 
 from __future__ import annotations
@@ -20,8 +42,13 @@ import dash
 from dash import html, dcc, Output, Input, no_update
 import plotly.graph_objects as go
 
-import zmq_subscriber  # new
-zmq_subscriber.start()  # start background listener
+from camera_stream import CameraStream
+
+CAR_IP = "192.168.68.103"   # ← set JetArcker IP
+VIDEO_PORT = 5557
+
+cam_stream = CameraStream(CAR_IP, VIDEO_PORT)
+cam_stream.start()
 
 # ---------------------------------------------------------------------
 # Try to import your future state_store. If not present, use fallbacks.
@@ -139,13 +166,15 @@ app.layout = html.Div(
                         html.Div("Camera", style={"marginBottom": "8px", "fontWeight": 600}),
                         html.Img(
                             id="camera-feed",
-                            src="",  # state_store.get_camera_b64() will fill this
+                            src="",  # will be updated by callback
                             style={
                                 "width": "100%", "height": "240px",
                                 "objectFit": "cover",
                                 "background": "#0b0f14", "borderRadius": "10px",
                             },
                         ),
+                        # trigger regular updates (~12.5 FPS)
+                        dcc.Interval(id="camera-tick", interval=80, n_intervals=0),
                     ],
                     style=CARD_STYLE | {"gridArea": "camera"},
                 ),
@@ -206,12 +235,20 @@ app.layout = html.Div(
 
 
 # ----------------------------- CALLBACKS -----------------------------
+# Camera: its own tiny callback, driven by camera-tick
+@app.callback(Output("camera-feed", "src"), Input("camera-tick", "n_intervals"))
+def update_camera(_):
+    b64 = cam_stream.latest_base64()
+    if not b64:
+        raise dash.exceptions.PreventUpdate
+    return f"data:image/jpeg;base64,{b64}"
+
+# UI: graphs, lidar, status — driven by tick (no camera output here)
 @app.callback(
     Output("graph-velocity", "figure"),
     Output("graph-accel", "figure"),
     Output("graph-steer", "figure"),
     Output("graph-lidar", "figure"),
-    Output("camera-feed", "src"),
     Output("status-battery", "children"),
     Output("status-conn", "children"),
     Output("status-mode", "children"),
@@ -219,10 +256,6 @@ app.layout = html.Div(
     prevent_initial_call=False,
 )
 def update_ui(_n):
-    """
-    Read-only: pulls the latest slices from state_store and renders the UI.
-    This function remains stable even if state_store is not ready yet.
-    """
     # ---------- Timeseries ----------
     if state_store and hasattr(state_store, "get_timeseries"):
         try:
@@ -251,16 +284,6 @@ def update_ui(_n):
         xs, ys, zs = [], [], []
     fig_lidar = lidar_fig(xs, ys, zs)
 
-    # ---------- Camera ----------
-    if state_store and hasattr(state_store, "get_camera_b64"):
-        try:
-            cam_src: Optional[str] = state_store.get_camera_b64()
-        except Exception:
-            cam_src = None
-    else:
-        cam_src = None
-    cam_src = cam_src if cam_src else no_update  # keep previous frame if none
-
     # ---------- Status ----------
     if state_store and hasattr(state_store, "get_status"):
         try:
@@ -273,8 +296,7 @@ def update_ui(_n):
     conn = st.get("conn", "—")
     mode = st.get("mode", "—")
 
-    return fig_v, fig_a, fig_s, fig_lidar, cam_src, batt, conn, mode
-
+    return fig_v, fig_a, fig_s, fig_lidar, batt, conn, mode
 
 # ----------------------------- ENTRY POINT ---------------------------
 def _open_browser():
@@ -289,7 +311,10 @@ if __name__ == "__main__":
         threading.Timer(1.0, _open_browser).start()
 
     # Dash 3.x uses app.run()
-    app.run(debug=True)
+    try:
+        app.run(host="0.0.0.0", port=8050, debug=False)
+    finally:
+        cam_stream.stop()    
 
 
 
