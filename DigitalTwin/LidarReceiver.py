@@ -27,7 +27,7 @@ class LidarReceiver:
     def __init__(self, endpoint: Optional[str] = None, queue_size: int = 1):
         # Endpoint for the Pi (publisher)
         if endpoint is None:
-            pi_ip = os.environ.get("PI_IP", "192.168.0.103")
+            pi_ip = os.environ.get("PI_IP", "192.168.68.103")
             endpoint = f"tcp://{pi_ip}:5560"
         self._endpoint = endpoint
 
@@ -88,6 +88,7 @@ class LidarReceiver:
                     self._sock.setsockopt(zmq.RCVTIMEO, 1000)  # 1s poll
 
                 msg = self._sock.recv_json()
+                msg["_ts"] = time.time()
                 with self._lock:
                     self._latest.append(msg)
                 backoff = 0.02  # fast again after success

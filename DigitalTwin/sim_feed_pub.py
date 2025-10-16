@@ -1,5 +1,7 @@
 # sim_feed_pub.py
 """
+A quick test program using Zeromq 
+
 ZeroMQ Publisher that broadcasts simulated Digital Twin data.
 Run this in a separate terminal:
     python sim_feed_pub.py
@@ -57,7 +59,7 @@ def main():
             t = time.monotonic() - t0
 
             # Telemetry @ UPDATE_HZ
-            v = 2.0 + 0.5 * math.sin(2 * math.pi * 0.3 * t)
+            v = 2.0 + 5 * math.sin(2 * math.pi * 0.03* t)
             a = 0.5 * math.cos(2 * math.pi * 0.3 * t)
             steer = 10 * math.sin(2 * math.pi * 0.1 * t)
             sock.send_multipart([b"telemetry", json.dumps({"v": v, "a": a, "steer": steer}).encode()])

@@ -309,10 +309,6 @@ def update_lidar_plot(_):
         x=[0], y=[0], mode="markers",
         marker=dict(size=8, color="red"), name="Robot"
     ))
-    fig.add_trace(go.Scattergl(
-        x=[0, R], y=[0, 0], mode="lines",
-        line=dict(width=4, color="lime"), name="Heading"
-    ))
 
     fig.update_layout(
         xaxis=dict(scaleanchor="y", scaleratio=1, range=[-R, R], showgrid=True, zeroline=False),
