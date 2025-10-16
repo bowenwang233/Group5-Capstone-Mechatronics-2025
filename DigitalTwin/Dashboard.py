@@ -2,36 +2,13 @@
 """
 Digital Twin Dashboard (UI-only)
 
-What this file does:
+This file:
 - Provides the Dash layout and lightweight callbacks to render:
   * 3 small line charts (velocity, acceleration, wheel angle)
   * Camera preview (top-right)
   * LiDAR point cloud (bottom-right)
   * Large Simulation panel (bottom-left)
-  * Tiny floating Status card
-- Reads *current* data from a shared state_store (threadsafe buffers),
-  which you will implement in a separate module (e.g., ZeroMQ subscribers).
-
-What this file does NOT do:
-- It does NOT open sockets, read ZeroMQ, or write data.
-- It does NOT manage threads for producers.
-- It only *reads* from state_store.
-
-Expected state_store API (you will implement later):
-------------------------------------------------------------------
-get_timeseries(window_sec: float) -> dict:
-    returns {"t": list[float], "v": list[float], "a": list[float], "steer": list[float]}
-    - - t is relative seconds in [-window_sec, 0] (past → 0)
-    - v in m/s, a in m/s^2, steer in degrees
-get_lidar() -> tuple[list[float], list[float], list[float]]:
-    returns (xs, ys, zs) point cloud arrays (already downsampled)
-get_camera_b64() -> str | None:
-    returns a data-URI string like "data:image/jpeg;base64,...." or None
-get_status() -> dict:
-    returns {"battery": "85%", "conn": "OK" | "LOST", "mode": "AUTO" | "MANUAL"}
-------------------------------------------------------------------
-
-You can test this module before building state_store; it will show placeholders.
+  * Tiny floating Status box 
 """
 
 from __future__ import annotations
@@ -44,15 +21,22 @@ import plotly.graph_objects as go
 
 from camera_stream import CameraStream
 from LidarReceiver import LidarReceiver
+import numpy as np
+
+from collections import deque
+import time
 
 
 CAR_IP = "192.168.68.103"   # ← set JetArcker IP
 VIDEO_PORT = 5557
 
+# keep scans for the last 2 seconds
+_LIDAR_WINDOW_S = 1.0
+_lidar_buf = deque()  # items: (ts, scan_dict)
+
 cam_stream = CameraStream(CAR_IP, VIDEO_PORT)
 cam_stream.start()
-
-lidar_receiver = LidarReceiver()   
+lidar_receiver = LidarReceiver()   # uses tcp://<PI_IP>:5560 by default (or PI_IP env var)
 lidar_receiver.start()
 
 # ---------------------------------------------------------------------
@@ -203,18 +187,19 @@ app.layout = html.Div(
                     style=CARD_STYLE | {"gridArea": "sim", "height": "100%"},
                 ),
 
-                # --- LiDAR (bottom-right) ---
+              # --- LiDAR (bottom-right) ---
                 html.Div(
-                [
-                dcc.Graph(
-                    id="graph-lidar",
-                    style={"height": "100%"},
-                    config={"responsive": True},
+                    [
+                        dcc.Graph(
+                            id="graph-lidar",
+                            style={"height": "100%"},
+                            config={"responsive": True},
+                        ),
+                        dcc.Interval(id="lidar-update", interval=200, n_intervals=0),
+                    ],
+                    style=CARD_STYLE | {"gridArea": "lidar", "height": "100%", "minHeight": 0},
                 ),
-                dcc.Interval(id="lidar-update", interval=200, n_intervals=0),
-                ],
-                style=CARD_STYLE | {"gridArea": "lidar", "height": "100%", "minHeight": 0},
-                ),
+
 
                 # --- Tiny floating Status (corner) ---
                 html.Div(
@@ -243,27 +228,6 @@ app.layout = html.Div(
 
 
 # ----------------------------- CALLBACKS -----------------------------
-#Lidar callback
-@app.callback(
-    Output("graph-lidar", "figure"),
-    Input("lidar-update", "n_intervals"),
-)
-def update_lidar_plot(_):
-    x, y, r = lidar_receiver.latest_xy(default_radius=8.0, downsample=1)
-    fig = go.Figure()
-    fig.add_trace(go.Scattergl(x=x, y=y, mode="markers", marker=dict(size=3), name="LiDAR"))
-    fig.add_trace(go.Scattergl(x=[0], y=[0], mode="markers", marker=dict(size=10), name="robot"))
-    fig.add_trace(go.Scattergl(x=[0, r], y=[0, 0], mode="lines", name="heading"))
-    fig.update_layout(
-        xaxis=dict(scaleanchor="y", scaleratio=1, range=[-r, r], zeroline=False),
-        yaxis=dict(range=[-r, r], zeroline=False),
-        height=700,
-        margin=dict(l=10, r=10, t=30, b=10),
-        template="plotly_dark",
-        title="LiDAR Point Cloud",
-    )
-    return fig
-    
 # Camera: its own tiny callback, driven by camera-tick
 @app.callback(Output("camera-feed", "src"), Input("camera-tick", "n_intervals"))
 def update_camera(_):
@@ -271,6 +235,94 @@ def update_camera(_):
     if not b64:
         raise dash.exceptions.PreventUpdate
     return f"data:image/jpeg;base64,{b64}"
+
+#Lidar
+@app.callback(
+    Output("graph-lidar", "figure"),
+    Input("lidar-update", "n_intervals")
+)
+def update_lidar_plot(_):
+    # pull latest; push into buffer with its timestamp
+    scan = lidar_receiver.latest_scan()
+    now = time.time()
+    if scan:
+        ts = float(scan.get("_ts", now))
+        _lidar_buf.append((ts, scan))
+
+    # prune old scans
+    cutoff = now - _LIDAR_WINDOW_S
+    while _lidar_buf and _lidar_buf[0][0] < cutoff:
+        _lidar_buf.popleft()
+
+    fig = go.Figure()
+
+    if not _lidar_buf:
+        fig.update_layout(template="plotly_dark", title="Waiting for LiDAR data…",
+                          height=600, margin=dict(l=10, r=10, t=30, b=10))
+        return fig
+
+    # collect points from all scans in the window
+    xs, ys, cols = [], [], []
+    rmax_seen = 3.0
+    for _, s in _lidar_buf:
+        r = np.asarray(s["ranges"], dtype=np.float32)
+        a0 = float(s["angle_min"]); da = float(s["angle_increment"])
+        rmin = max(0.05, float(s["range_min"]))
+        rmax = float(s["range_max"]) if np.isfinite(s["range_max"]) else 12.0
+
+        n = r.size
+        ang = a0 + da * np.arange(n, dtype=np.float32)
+        valid = np.isfinite(r) & (r >= rmin) & (r <= rmax)
+        if not np.any(valid):
+            continue
+        rv = r[valid]; av = ang[valid]
+
+        xs.append((rv * np.cos(av)).astype(np.float32))
+        ys.append((rv * np.sin(av)).astype(np.float32))
+        cols.append(rv.astype(np.float32))
+        rmax_seen = max(rmax_seen, float(rv.max()))
+
+    if not xs:
+        fig.update_layout(template="plotly_dark", title="No valid returns",
+                          height=600, margin=dict(l=10, r=10, t=30, b=10))
+        return fig
+
+    X = np.concatenate(xs)
+    Y = np.concatenate(ys)
+    C = np.concatenate(cols)
+
+    # limit max points for perf (optional)
+    MAX_PTS = 80000
+    if X.size > MAX_PTS:
+        idx = np.linspace(0, X.size - 1, MAX_PTS).astype(int)
+        X, Y, C = X[idx], Y[idx], C[idx]
+
+    R = max(3.0, min(1.1 * np.max(np.hypot(X, Y)), rmax_seen))
+
+    # dense 2D scatter (GPU)
+    fig.add_trace(go.Scattergl(
+        x=X, y=Y, mode="markers",
+        marker=dict(size=2, opacity=0.6, color=C, colorscale="Turbo"),
+        name="LiDAR"
+    ))
+    fig.add_trace(go.Scattergl(
+        x=[0], y=[0], mode="markers",
+        marker=dict(size=8, color="red"), name="Robot"
+    ))
+    fig.add_trace(go.Scattergl(
+        x=[0, R], y=[0, 0], mode="lines",
+        line=dict(width=4, color="lime"), name="Heading"
+    ))
+
+    fig.update_layout(
+        xaxis=dict(scaleanchor="y", scaleratio=1, range=[-R, R], showgrid=True, zeroline=False),
+        yaxis=dict(range=[-R, R], showgrid=True, zeroline=False),
+        height=600,
+        margin=dict(l=10, r=10, t=30, b=10),
+        template="plotly_dark",
+        title="LiDAR (last 2 s, accumulated)",
+    )
+    return fig
 
 # UI: graphs, lidar, status — driven by tick (no camera output here)
 @app.callback(
@@ -332,8 +384,7 @@ if __name__ == "__main__":
     try:
         app.run(host="0.0.0.0", port=8050, debug=False)
     finally:
-        cam_stream.stop() 
-        lidar_receiver.stop()   
-
+        cam_stream.stop()    
+        lidar_receiver.stop()
 
 
