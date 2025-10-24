@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+
 """
 Keyboard Control for Digital Twin
 ==================================
@@ -8,9 +8,9 @@ Usage:
     python keyboard_control.py
 
 Controls:
-    ↑ (Up Arrow)    - Move Forward
+    ↑ (Up Arrow)     - Move Forward
     ↓ (Down Arrow)  - Move Backward
-    ← (Left Arrow)  - Turn Left
+    ← (Left Arrow)  - Turn Left 
     → (Right Arrow) - Turn Right
     SPACE           - Stop
     ESC / Q         - Quit
@@ -19,13 +19,14 @@ The program sends velocity commands over ZeroMQ to the car at 192.168.68.103:555
 """
 
 import zmq
-import json
+import json 
 import time
 import sys
 from pynput import keyboard
 
-# ==================== Configuration ====================
-CAR_IP = "192.168.68.103"
+# ==================== Configuration  ====================
+#CAR_IP = "192.168.68.103"
+CAR_IP = "192.168.149.1"
 CONTROL_PORT = 5558
 ZMQ_ADDR = f"tcp://{CAR_IP}:{CONTROL_PORT}"
 
@@ -53,14 +54,14 @@ def send_command(linear: float, angular: float):
     """Send velocity command via ZeroMQ."""
     cmd = {
         "linear": float(linear),
-        "angular": float(angular),
+         "angular": float(angular),
         "timestamp": time.time()
     }
     try:
         sock.send_json(cmd)
         print(f"\r[CMD] Linear: {linear:+.2f} m/s | Angular: {angular:+.2f} rad/s", end="", flush=True)
     except Exception as e:
-        print(f"\n[ERROR] Failed to send command: {e}")
+         print(f"\n[ERROR] Failed to send command: {e}")
 
 
 def stop():

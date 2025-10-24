@@ -21,13 +21,14 @@ from typing import Tuple, Optional, Dict, Any
 
 import numpy as np
 import zmq
+CAR_IP = "192.168.149.1"
 
 
 class LidarReceiver:
     def __init__(self, endpoint: Optional[str] = None, queue_size: int = 1):
         # Endpoint for the Pi (publisher)
         if endpoint is None:
-            pi_ip = os.environ.get("PI_IP", "192.168.68.103")
+            pi_ip = os.environ.get("PI_IP", CAR_IP)
             endpoint = f"tcp://{pi_ip}:5560"
         self._endpoint = endpoint
 

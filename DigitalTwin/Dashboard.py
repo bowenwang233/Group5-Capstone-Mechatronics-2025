@@ -27,7 +27,8 @@ from collections import deque
 import time
 
 
-CAR_IP = "192.168.68.103"   # ← set JetArcker IP
+#CAR_IP = "192.168.68.103"   # ← set JetArcker IP(home)
+CAR_IP = "192.168.149.1"   # ← set JetArcker IP（wifi direct)
 VIDEO_PORT = 5557
 
 # keep scans for the last 2 seconds
@@ -38,6 +39,8 @@ cam_stream = CameraStream(CAR_IP, VIDEO_PORT)
 cam_stream.start()
 lidar_receiver = LidarReceiver()   # uses tcp://<PI_IP>:5560 by default (or PI_IP env var)
 lidar_receiver.start()
+from KinematicsReceiver import start_receiver
+start_receiver()
 
 # ---------------------------------------------------------------------
 # Try to import your future state_store. If not present, use fallbacks.
