@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import time
 import signal
 import sys
 from typing import Optional
@@ -58,6 +59,7 @@ class KinematicsStream(Node):
         ema_alpha_yaw: float,
         ema_alpha_steer: float,
         max_dt_s: float,
+        max_pub_hz: float
         pub_endpoint: str,
         also_stdout: bool,
         topic_name: str,
@@ -76,6 +78,8 @@ class KinematicsStream(Node):
         self.linear_corr = float(linear_correction)
         self.angular_corr = float(angular_correction)
         self.topic_name = topic_name.encode("utf-8")
+        self.max_pub_hz = float(max_pub_hz)
+        self._last_send = 0.0
 
         # ZeroMQ
         self.pub = None
@@ -188,6 +192,12 @@ class KinematicsStream(Node):
 
     # -------- output --------
     def _publish(self, t_now: float):
+        # Rate-limit ZMQ publishing to avoid UI overload
+        if self.max_pub_hz > 0:
+            now_wall = time.time()
+            if now_wall - self._last_send < (1.0 / self.max_pub_hz):
+                return
+            self._last_send = now_wall
         # Use the freshest timestamp we have seen
         self._last_pub_t = t_now
 
@@ -216,6 +226,7 @@ def main():
     ap.add_argument("--ema-alpha-a", type=float, default=0.35, help="EMA smoothing for acceleration.")
     ap.add_argument("--ema-alpha-yaw", type=float, default=0.35, help="EMA smoothing for yaw-rate.")
     ap.add_argument("--ema-alpha-steer", type=float, default=0.35, help="EMA smoothing for steering angle.")
+    ap.add_argument("--max-pub-hz", type=float, default=30.0, help="Max ZeroMQ publish rate (Hz).")
     ap.add_argument("--max-dt-s", type=float, default=0.25, help="Reset derivative if sample gap exceeds this (s).")
 
     ap.add_argument("--linear-correction", type=float, default=1.0,
@@ -249,6 +260,8 @@ def main():
         topic_name=args.topic,
         linear_correction=args.linear_correction,
         angular_correction=args.angular_correction,
+    ,
+        max_pub_hz=args.max_pub_hz
     )
 
     try:
