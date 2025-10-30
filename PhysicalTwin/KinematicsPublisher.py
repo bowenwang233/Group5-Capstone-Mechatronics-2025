@@ -223,8 +223,8 @@ def main():
     ap.add_argument("--angular-correction", type=float, default=1.0,
                     help="Scale factor applied to yaw-rate (tutorial correction).")
 
-    ap.add_argument("--pub-endpoint", type=str, default="tcp://*:5565",
-                    help='ZeroMQ PUB endpoint to bind (e.g., "tcp://*:5565"). Empty disables ZMQ.')
+    ap.add_argument("--pub-endpoint", type=str, default="tcp://*:5558",
+                    help='ZeroMQ PUB endpoint to bind (e.g., "tcp://*:5558"). Empty disables ZMQ.')
     ap.add_argument("--topic", type=str, default="telemetry", help="ZeroMQ topic string.")
     ap.add_argument("--stdout", action="store_true", help="Also print JSON lines to stdout.")
     args = ap.parse_args()
