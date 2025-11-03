@@ -25,8 +25,8 @@ import sys
 from pynput import keyboard
 
 # ==================== Configuration  ====================
-#CAR_IP = "192.168.68.103"
-CAR_IP = "192.168.149.1"
+CAR_IP = "192.168.68.103"
+#CAR_IP = "192.168.149.1"
 CONTROL_PORT = 5558
 ZMQ_ADDR = f"tcp://{CAR_IP}:{CONTROL_PORT}"
 

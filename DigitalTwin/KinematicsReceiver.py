@@ -1,34 +1,46 @@
-# KinematicsReceiver.py
+# KinematicsReceiver_compat.py
 from __future__ import annotations
-import json
-import os
-import threading
-import time
-from math import degrees
-from typing import Optional
+import json, os, threading, time, math
+from typing import Optional, Any, Dict, List
+import zmq
+import state_store
 
-import zmq   # pip install pyzmq
-import state_store  # your existing store with append_sample()/set_status()
-CAR_IP = "192.168.149.1"
-CAR_PORT = "5557"
-# ---- Config (env overrides) ----
-PI_IP = os.environ.get("PI_IP", os.environ.get("CAR_IP", CAR_IP))
-TELEMETRY_PORT = int(os.environ.get("TELEMETRY_PORT", CAR_PORT))  # avoid 5557 (camera) / 5560 (LiDAR)
-TOPIC = os.environ.get("TELEMETRY_TOPIC", "telemetry").encode("utf-8")
+CAR_IP = os.environ.get("CAR_IP", os.environ.get("PI_IP", "192.168.68.103"))
+PORT   = int(os.environ.get("TELEMETRY_PORT", "5558"))
+TOPIC_BYTES  = os.environ.get("TELEMETRY_TOPIC", "telemetry").encode("utf-8")
 
-# Conn health thresholds
 STALE_S = 1.0
 LOST_S  = 5.0
 
+def _pick(d: Dict[str, Any], names: List[str]) -> Optional[float]:
+    for n in names:
+        if n in d and d[n] is not None:
+            try:
+                return float(d[n])
+            except Exception:
+                continue
+    return None
+
+def _rad2deg_if_needed(x: Optional[float]) -> Optional[float]:
+    if x is None:
+        return None
+    # If the magnitude suggests radians (<= ~6 rad), convert; if already degrees, leave as-is.
+    if abs(x) <= math.pi * 2.2:
+        return math.degrees(x)
+    return x
+
 class _Receiver:
-    def __init__(self, ip: str, port: int, topic: bytes):
+    def __init__(self, ip: str, port: int):
         self.endpoint = f"tcp://{ip}:{port}"
-        self.topic = topic
         self.ctx = zmq.Context.instance()
         self.sock: Optional[zmq.Socket] = None
         self.stop_ev = threading.Event()
         self.th: Optional[threading.Thread] = None
         self.last_rx_wall: float = 0.0
+        self._last_push_wall: float = 0.0
+        self._last_status_wall: float = 0.0
+        self._rx_count: int = 0
+        self._rx_hz: float = 0.0
 
     def start(self):
         if self.th and self.th.is_alive():
@@ -36,11 +48,12 @@ class _Receiver:
         self.stop_ev.clear()
         self.sock = self.ctx.socket(zmq.SUB)
         self.sock.setsockopt(zmq.RCVHWM, 2000)
-        self.sock.setsockopt(zmq.SUBSCRIBE, self.topic)
+        self.sock.setsockopt(zmq.CONFLATE, 1)
+        # Broad subscribe to accept any topic framing; we'll not require a topic match.
+        self.sock.setsockopt(zmq.SUBSCRIBE, b"")
         self.sock.connect(self.endpoint)
-        self.th = threading.Thread(target=self._loop, name="KinematicsReceiver", daemon=True)
+        self.th = threading.Thread(target=self._loop, name="KinematicsReceiverCompat", daemon=True)
         self.th.start()
-        # background status updater
         threading.Thread(target=self._status_loop, name="KinematicsStatus", daemon=True).start()
 
     def stop(self):
@@ -57,23 +70,45 @@ class _Receiver:
         poller.register(self.sock, zmq.POLLIN)
         while not self.stop_ev.is_set():
             try:
-                ev = dict(poller.poll(100))  # 100 ms
+                ev = dict(poller.poll(100))
                 if self.sock in ev and ev[self.sock] & zmq.POLLIN:
-                    topic, payload = self.sock.recv_multipart()
-                    if topic != self.topic:
+                    frames = self.sock.recv_multipart()
+                    # Accept 1-frame (payload) or 2-frame (topic, payload)
+                    payload = frames[-1] if len(frames) >= 1 else None
+                    if not payload:
                         continue
-                    msg = json.loads(payload.decode("utf-8"))
-                    v = msg.get("v")      # m/s
-                    a = msg.get("a")      # m/s^2
-                    steer_rad = msg.get("steer")  # radians
-                    steer_deg = degrees(steer_rad) if steer_rad is not None else None
+                    try:
+                        msg = json.loads(payload.decode("utf-8"))
+                    except Exception:
+                        # not JSON, ignore
+                        continue
 
-                    # Use dashboard-side monotonic wall time (let state_store stamp it)
-                    state_store.append_sample(v, a, steer_deg, t=None)
+                    # Accept various field names for robustness
+                    v = _pick(msg, ["v","vel","velocity","speed","linear_v","vx"])
+                    a = _pick(msg, ["a","acc","accel","acceleration","ax"])
+                    steer = _pick(msg, ["steer","steer_deg","steering","steering_deg","delta"])
+                    steer_deg = _rad2deg_if_needed(steer)
 
-                    # mark connection fresh
-                    self.last_rx_wall = time.time()
-                    state_store.set_status(conn="OK")
+                    now_wall = time.time()
+
+                    # Only push ~20 Hz
+                    if now_wall - self._last_push_wall >= 0.05:
+                        state_store.append_sample(v, a, steer_deg, t=None)
+                        self._last_push_wall = now_wall
+
+                    # Metrics
+                    self._rx_count += 1
+                    if self.last_rx_wall == 0.0:
+                        self.last_rx_wall = now_wall
+                    # update hz once per second
+                    if now_wall - self.last_rx_wall >= 1.0:
+                        self._rx_hz = self._rx_count / (now_wall - self.last_rx_wall)
+                        self._rx_count = 0
+                        self.last_rx_wall = now_wall
+
+                    if now_wall - self._last_status_wall >= 0.5:
+                        state_store.set_status(conn="OK", rx_hz=round(self._rx_hz, 1))
+                        self._last_status_wall = now_wall
             except Exception:
                 time.sleep(0.05)
 
@@ -87,18 +122,15 @@ class _Receiver:
                 state_store.set_status(conn="Stale")
             time.sleep(0.2)
 
-_receiver_singleton = _Receiver(PI_IP, TELEMETRY_PORT, TOPIC)
+_receiver_singleton = _Receiver(CAR_IP, PORT)
 
 def start_receiver():
-    """Call once at app startup."""
     _receiver_singleton.start()
 
 def stop_receiver():
     _receiver_singleton.stop()
 
 if __name__ == "__main__":
-    # Handy for a quick manual run while developing (still needs the dashboard
-    # process to import the same state_store instance; typically you won't run this standalone).
     start_receiver()
     try:
         while True:
