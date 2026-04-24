@@ -1,0 +1,4 @@
+/home/ethan/Desktop/robot_stuff (copy)/UI_stuff/UI/build/CMakeFiles/RoverDashboard.dir
+/home/ethan/Desktop/robot_stuff (copy)/UI_stuff/UI/build/CMakeFiles/edit_cache.dir
+/home/ethan/Desktop/robot_stuff (copy)/UI_stuff/UI/build/CMakeFiles/rebuild_cache.dir
+/home/ethan/Desktop/robot_stuff (copy)/UI_stuff/UI/build/CMakeFiles/RoverDashboard_autogen.dir
