@@ -1,0 +1,49 @@
+turning off / preventing default hiwonder programs affecting the camera
+
+lsof /dev/video0
+
+^^^  kill pid that is shown
+
+rm -f /dev/shm/orbbec_device_lock
+
+
+cd to below directory
+
+cd /home/ubuntu/third_party_ros2/orbbec_ws
+
+source install/setup.bash
+
+ros2 launch orbbec_camera astra.launch.py \
+    enable_color:=false \
+    enable_depth:=true \
+    enable_point_cloud:=false \
+    enable_ir:=false \
+    depth_width:=640 depth_height:=480 depth_fps:=30 depth_format:=Y11 \
+    ir_width:=640 ir_height:=480 ir_fps:=30 ir_format:=Y10
+
+
+new terminal
+cd test_programs
+
+python3 testing_other_publisher_method_v2.py
+
+numpy was 2.2.6 before, different version now to work with cvbridge
+
+auto start uses astra.launch.py
+
+root@raspberrypi:/home/ubuntu/third_party_ros2/orbbec_ws/src/OrbbecSDK_ROS2/orbbec_camera/launch# ls
+astra.launch.py             astra_stereo_u3.launch.py  dabai_dcw2.launch.py     dabai_pro.launch.py   gemini2.launch.py            gemini_e.launch.py        multi_camera.launch.py
+astra2.launch.py            dabai.launch.py            dabai_dw.launch.py       deeya.launch.py       gemini2L.launch.py           gemini_e_lite.launch.py   multi_camera_synced.launch.py
+astra_adv.launch.py         dabai_d1.launch.py         dabai_dw2.launch.py      femto.launch.py       gemini2VL.launch.py          gemini_ew.launch.py       ob_camera.launch.py
+astra_embedded_s.launch.py  dabai_dcl.py               dabai_max.launch.py      femto_bolt.launch.py  gemini2XL.launch.py          gemini_ew_lite.launch.py
+astra_pro2.launch.py        dabai_dcw.launch.py        dabai_max_pro.launch.py  femto_mega.launch.py  gemini_330_series.launch.py  gemini_uw.launch.py
+
+default startup program locations, can toggle which startup programs run
+
+root@raspberrypi:/home/ubuntu/ros2_ws/install/bringup/share/bringup/launch# nano bringup.launch.py
+root@raspberrypi:/home/ubuntu/ros2_ws/src/peripherals/launch# nano depth_camera.launch.py
+root@raspberrypi:/home/ubuntu/third_party_ros2/orbbec_ws/src/OrbbecSDK_ROS2/orbbec_camera/launch# nano astra.launch.py
+
+
+
+

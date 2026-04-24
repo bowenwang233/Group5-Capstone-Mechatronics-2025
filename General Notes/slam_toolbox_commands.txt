@@ -1,0 +1,26 @@
+if running slam toolbox and nav2 to perform mapping, localization, and path planning, better done on board, lidar saturates wifi when sending full /scan message
+
+
+ros2 launch slam_toolbox online_async_launch.py
+
+ros2 run rviz2 rviz2 -d /opt/ros/humble/share/nav2_bringup/rviz/nav2_default_view.rviz
+
+ros2 launch nav2_bringup navigation_launch.py
+
+ros2 run nav2_map_server map_saver_cli -f maps/my_map1
+
+Ctrl-c those terminals when map is complete and saved
+NAVIGATION WHEN MAP IS COMPLETE --------
+
+ros2 launch nav2_bringup navigation_launch.py map:=maps/my_map1.yaml
+
+ros2 launch nav2_bringup navigation_launch.py
+
+ros2 run rviz2 rviz2 -d /opt/ros/humble/share/nav2_bringup/rviz/nav2_default_view.rviz
+
+In rviz, select 2D Pose Estimate and click where the robot is currently in the map
+
+
+to edit configuration file
+
+sudo nano /opt/ros/humble/share/nav2_bringup/params/nav2_params.yaml

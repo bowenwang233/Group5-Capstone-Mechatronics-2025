@@ -1,0 +1,7 @@
+disabling built in wifi if working with external adapter with second wifi connection setup
+
+in new ssh on new wifi
+
+sudo nmcli connection down "HW-676E3266"
+sudo nmcli connection modify "HW-676E3266" connection.autoconnect no
+

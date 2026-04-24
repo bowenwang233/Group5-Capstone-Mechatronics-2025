@@ -1,0 +1,16 @@
+Pc side
+
+For yolo receiver python program
+
+Python: 3.10.12
+numpy: 1.26.4
+imagezmq: 1.2.0
+opencv: 4.13.0
+ultralytics: 8.4.9
+pyzmq: 27.1.0
+
+
+For c++ dashboard
+
+G++: g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0
+Qt: Using Qt version 5.15.3 in /usr/lib/x86_64-linux-gnu
