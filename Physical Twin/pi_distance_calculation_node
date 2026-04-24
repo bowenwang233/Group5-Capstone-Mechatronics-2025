@@ -1,0 +1,174 @@
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Image, CameraInfo
+from geometry_msgs.msg import PoseStamped
+import numpy as np
+import socket
+import struct
+import time as time_module
+from cv_bridge import CvBridge
+
+class PersonPoseNode(Node):
+    def __init__(self):
+        super().__init__('person_pose_node')
+
+        # --- ROS ---
+        self.bridge = CvBridge()
+        self.depth_image = None
+        self.camera_info = None
+
+        self.create_subscription(Image, '/camera/depth/image_raw', self.depth_callback, 10)
+        self.create_subscription(CameraInfo, '/camera/depth/camera_info', self.camera_info_callback, 10)
+        self.pose_pub = self.create_publisher(PoseStamped, '/person_pose', 10)
+
+        # --- TCP Config ---
+        self.host = "10.42.0.50"
+        self.port = 5005
+        self.conn = None
+
+        # --- State ---
+        self.last_bbox = None
+        self.last_bbox_time = self.get_clock().now()
+        self.filtered_Z = None
+        self.target_lost_printed = False # Correctly placed inside __init__
+
+        # Initial connection
+        self.connect_to_pc()
+
+        # Timer loop
+        self.create_timer(0.03, self.process)
+
+    def connect_to_pc(self):
+        if self.conn:
+            try:
+                self.conn.close()
+            except:
+                pass
+        self.conn = None
+        self.get_logger().info(f"Connecting to PC at {self.host}:{self.port}...")
+        
+        while self.conn is None:
+            try:
+                temp_conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                temp_conn.settimeout(1.0)
+                temp_conn.connect((self.host, self.port))
+                self.conn = temp_conn
+                self.conn.setblocking(False)
+                self.get_logger().info("Connected to PC!")
+            except (ConnectionRefusedError, socket.timeout, OSError):
+                self.get_logger().info("PC not found, retrying in 1s...")
+                time_module.sleep(1.0)
+
+    def depth_callback(self, msg):
+        self.depth_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+
+    def camera_info_callback(self, msg):
+        self.camera_info = msg
+
+    def get_bbox(self):
+        if self.conn is None:
+            return
+
+        latest_data = None
+        packet_size = 52
+
+        try:
+            while True:
+                data = self.conn.recv(packet_size)
+                if not data:
+                    raise ConnectionError("PC closed connection")
+                if len(data) == packet_size:
+                    latest_data = data
+        except BlockingIOError:
+            pass
+        except (ConnectionResetError, BrokenPipeError, ConnectionError) as e:
+            self.get_logger().warn(f"Connection lost: {e}. Attempting recovery...")
+            self.connect_to_pc()
+            return
+
+        if latest_data:
+            offset = 4 
+            class_id, conf, x, y, w, h = struct.unpack_from("<i5f", latest_data, offset)
+            if class_id != 0:
+                self.last_bbox = (int(x), int(y), int(x + w), int(y + h))
+                self.last_bbox_time = self.get_clock().now()
+            else:
+                self.last_bbox = None
+
+    def process(self):
+        if self.depth_image is None or self.camera_info is None:
+            return
+
+        self.get_bbox()
+
+        now = self.get_clock().now()
+        dt = (now - self.last_bbox_time).nanoseconds / 1e9
+
+        if dt > 0.3 or self.last_bbox is None:
+            self.filtered_Z = None
+            
+            if not self.target_lost_printed:
+                self.get_logger().info("No person detected.")
+                self.target_lost_printed = True
+                
+            self.publish_null_pose()
+            return
+
+        # Target found - reset print flag
+        self.target_lost_printed = False
+
+        x1, y1, x2, y2 = self.last_bbox
+        h, w = self.depth_image.shape
+        x1, x2 = max(0, x1), min(w, x2)
+        y1, y2 = max(0, y1), min(h, y2)
+
+        if x2 <= x1 or y2 <= y1:
+            return
+
+        cx1, cx2 = int(x1 + 0.3*(x2-x1)), int(x1 + 0.7*(x2-x1))
+        cy1, cy2 = int(y1 + 0.3*(y2-y1)), int(y1 + 0.7*(y2-y1))
+        region = self.depth_image[cy1:cy2, cx1:cx2]
+        valid = region[np.isfinite(region)]
+        valid = valid[valid > 0]
+
+        if len(valid) == 0:
+            return
+
+        new_Z = np.median(valid) / 1000.0
+        self.filtered_Z = new_Z if self.filtered_Z is None else (0.4 * new_Z + 0.6 * self.filtered_Z)
+
+        fx, fy = self.camera_info.k[0], self.camera_info.k[4]
+        cx, cy = self.camera_info.k[2], self.camera_info.k[5]
+
+        X = ((x1 + x2)/2.0 - cx) * self.filtered_Z / fx
+        Y = ((y1 + y2)/2.0 - cy) * self.filtered_Z / fy
+
+        self.publish_pose(self.filtered_Z, -X, 0.0)
+
+    def publish_null_pose(self):
+        pose = PoseStamped()
+        pose.header.frame_id = "depth_cam_link"
+        pose.header.stamp = self.get_clock().now().to_msg()
+        pose.pose.position.x, pose.pose.position.y, pose.pose.position.z = [float('nan')]*3
+        pose.pose.orientation.w = 1.0
+        self.pose_pub.publish(pose)
+
+    def publish_pose(self, x, y, z):
+        pose = PoseStamped()
+        pose.header.frame_id = "depth_cam_link"
+        pose.header.stamp = self.get_clock().now().to_msg()
+        pose.pose.position.x, pose.pose.position.y, pose.pose.position.z = float(x), float(y), float(z)
+        pose.pose.orientation.w = 1.0
+        self.pose_pub.publish(pose)
+        self.get_logger().info(f"Person at: {x:.2f} m")
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = PersonPoseNode()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+

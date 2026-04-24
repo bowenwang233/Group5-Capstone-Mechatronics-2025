@@ -1,0 +1,102 @@
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import LaserScan
+from std_msgs.msg import Float32, Bool, Int32
+import numpy as np
+
+class ObstacleAvoidanceNode(Node):
+    def __init__(self):
+        super().__init__('obstacle_avoidance_node')
+
+        # --- Subscriptions ---
+        # We only need the Lidar scan for this standalone version
+        self.create_subscription(LaserScan, '/scan', self.scan_callback, 10)
+
+        # --- Publishers ---
+        self.obstacle_pub = self.create_publisher(Bool, '/is_blocked', 10)
+        self.min_dist_pub = self.create_publisher(Float32, '/min_obstacle_dist', 10)
+        self.dir_pub = self.create_publisher(Int32, '/avoidance_dir', 10)
+
+        # --- Settings ---
+        # Hard threshold: anything within 40cm triggers avoidance
+        self.stop_threshold = 0.4  
+        
+        self.get_logger().info("Standalone Lidar Safety Node Started (40cm Shield)")
+
+    def scan_callback(self, msg):
+        ranges = np.array(msg.ranges)
+        num_points = len(ranges) # 1080
+
+        # --- CUSTOM DANGER ZONE ---
+        # Right-to-Centre: 950 to 1080
+        # Centre-to-Left:  0 to 130
+        right_indices = np.arange(950, 1080)
+        left_indices = np.arange(0, 131)
+        
+        # Helper to find valid hits in a specific slice
+        def find_hits(indices, threshold):
+            hits = []
+            for idx in indices:
+                # Ignore values below 0.15 (usually the robot's own body)
+                # and ignore 'inf' or values above our threshold
+                dist = ranges[idx]
+                if 0.15 < dist < threshold:
+                    hits.append(dist)
+            return hits
+
+        hits_right = find_hits(right_indices, self.stop_threshold)
+        hits_left = find_hits(left_indices, self.stop_threshold)
+
+        total_hits = len(hits_right) + len(hits_left)
+        
+        is_blocked = False
+        avoid_dir = 0
+        min_seen_dist = 12.0 # Default to max range
+
+        # Require a cluster of at least 10 hits to avoid noise/ghosting
+        if total_hits >= 10:
+            is_blocked = True
+            
+            # Find the actual minimum distance among all detections
+            all_hits = hits_right + hits_left
+            min_seen_dist = float(np.min(all_hits))
+            
+            # 1 = Turn Left (Object on Right), 2 = Turn Right (Object on Left)
+            if len(hits_right) > len(hits_left):
+                avoid_dir = 1
+                side = "RIGHT"
+            else:
+                avoid_dir = 2
+                side = "LEFT"
+            
+            self.get_logger().info(f"OBJECT DETECTED! {side} side at {min_seen_dist:.2f}m")
+        
+        # Publish to Simulink
+        self.publish_status(is_blocked, min_seen_dist, avoid_dir)
+
+    def publish_status(self, blocked, distance, direction):
+        # b_msg (Bool)
+        b_msg = Bool()
+        b_msg.data = bool(blocked)
+        self.obstacle_pub.publish(b_msg)
+
+        # d_msg (Float32) - Distance to closest object
+        d_msg = Float32()
+        d_msg.data = float(distance)
+        self.min_dist_pub.publish(d_msg)
+
+        # r_msg (Int32) - Avoidance Direction (0=none, 1=left, 2=right)
+        r_msg = Int32()
+        r_msg.data = int(direction)
+        self.dir_pub.publish(r_msg)
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = ObstacleAvoidanceNode()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+
